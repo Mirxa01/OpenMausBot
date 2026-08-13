@@ -128,6 +128,10 @@ export class RoutineStore {
     return this.routines.find((r) => r.id === id) ?? null;
   }
 
+  isRunning(id: string): boolean {
+    return this.running.has(id);
+  }
+
   create(input: { botId: string; name: string; prompt: string; schedule: unknown; enabled?: boolean }): RoutineView {
     const name = String(input.name ?? "").trim();
     const prompt = String(input.prompt ?? "").trim();

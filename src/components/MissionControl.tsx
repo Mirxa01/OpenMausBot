@@ -2,14 +2,17 @@
 // live card: mascot state, streaming text as it arrives, the latest tool
 // run, a live frame of its computer, and the next scheduled routine. Pure
 // projection of store state — zero transports, zero new endpoints.
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
+  AlertTriangle,
   ArrowUpRight,
   CalendarClock,
+  CheckCircle2,
   Grid2x2,
   Loader2,
   Monitor,
+  Rocket,
   Square,
   X,
   Zap,
@@ -19,6 +22,19 @@ import { MausAvatar } from "./Avatar";
 import { stateForBot } from "@/lib/mascot";
 import { relTime, scheduleLabel } from "./RoutinesCard";
 import { cn } from "@/lib/cn";
+
+interface LaunchSequenceResult {
+  attempted: number;
+  started: number;
+  skipped: number;
+  failed: number;
+  results: Array<{
+    botId: string;
+    routineName: string;
+    status: "started" | "skipped" | "failed";
+    reason?: string;
+  }>;
+}
 
 function statusLine(bot: Bot, streaming?: string): { label: string; tone: "busy" | "unread" | "idle" } {
   if (bot.busy) return { label: streaming ? "Replying…" : "Working…", tone: "busy" };
@@ -174,6 +190,9 @@ function BotCard({ bot }: { bot: Bot }) {
 
 export function MissionControl() {
   const { state, dispatch } = useStore();
+  const [launching, setLaunching] = useState(false);
+  const [launchResult, setLaunchResult] = useState<LaunchSequenceResult | null>(null);
+  const [launchError, setLaunchError] = useState<string | null>(null);
   const close = () => dispatch({ type: "toggleMissionControl", open: false });
 
   useEffect(() => {
@@ -197,6 +216,17 @@ export function MissionControl() {
     [state.routines],
   );
   const botName = (id: string) => state.bots.find((b) => b.id === id)?.name ?? "?";
+  const launchSequence = () => {
+    setLaunching(true);
+    setLaunchError(null);
+    api("/api/routines/launch-sequence", { method: "POST" })
+      .then((result: LaunchSequenceResult) => setLaunchResult(result))
+      .catch((error: unknown) => {
+        setLaunchResult(null);
+        setLaunchError(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => setLaunching(false));
+  };
 
   return (
     <div className="fixed inset-0 z-40 flex flex-col bg-app/97 backdrop-blur-sm">
@@ -228,8 +258,26 @@ export function MissionControl() {
           </span>
         </div>
         <button
+          type="button"
+          onClick={launchSequence}
+          disabled={launching || scheduled === 0}
+          className="group ml-auto flex items-center gap-2 rounded-xl border border-accent/30 bg-accent/10 px-3.5 py-2 text-[12px] font-semibold text-accent shadow-[0_0_24px_rgba(46,169,255,0.08)] transition hover:border-accent/50 hover:bg-accent/15 disabled:cursor-not-allowed disabled:opacity-40"
+          title={
+            scheduled > 0
+              ? "Launch the next enabled mission for every idle bot"
+              : "Create an enabled routine to launch a sequence"
+          }
+        >
+          {launching ? (
+            <Loader2 size={14} className="animate-spin" />
+          ) : (
+            <Rocket size={14} className="transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
+          )}
+          {launching ? "Launching..." : "Launch sequence"}
+        </button>
+        <button
           onClick={close}
-          className="ml-auto rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"
+          className="rounded-md p-1.5 text-ink-secondary hover:bg-raised hover:text-ink"
           title="Close (Esc)"
         >
           <X size={20} />
@@ -238,10 +286,36 @@ export function MissionControl() {
 
       {/* Fleet grid */}
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto grid w-full max-w-[1240px] grid-cols-1 gap-4 px-8 py-4 sm:grid-cols-2 xl:grid-cols-3">
-          {bots.map((b) => (
-            <BotCard key={b.id} bot={b} />
-          ))}
+        <div className="mx-auto w-full max-w-[1240px] px-8 py-4">
+          {(launchResult || launchError) && (
+            <div
+              className={cn(
+                "mb-4 flex items-center gap-3 rounded-xl border px-4 py-3 text-[12.5px]",
+                launchError || launchResult?.failed
+                  ? "border-warning/25 bg-warning/5 text-warning"
+                  : "border-success/25 bg-success/5 text-success",
+              )}
+            >
+              {launchError || launchResult?.failed ? <AlertTriangle size={15} /> : <CheckCircle2 size={15} />}
+              <span className="font-semibold">
+                {launchError
+                  ? `Sequence blocked: ${launchError}`
+                  : launchResult?.attempted === 0
+                    ? "No enabled missions are ready for launch."
+                    : `Sequence complete: ${launchResult?.started} launched, ${launchResult?.skipped} skipped, ${launchResult?.failed} failed.`}
+              </span>
+              {launchResult && launchResult.results.length > 0 && (
+                <span className="min-w-0 flex-1 truncate text-right text-ink-secondary">
+                  {launchResult.results.map((result) => `${botName(result.botId)}: ${result.routineName}`).join(" · ")}
+                </span>
+              )}
+            </div>
+          )}
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {bots.map((b) => (
+              <BotCard key={b.id} bot={b} />
+            ))}
+          </div>
         </div>
       </div>
 

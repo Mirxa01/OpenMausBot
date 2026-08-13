@@ -225,6 +225,48 @@ describe("harness HTTP API", () => {
     expect(missing.status).toBe(404);
   });
 
+  it("launches at most one enabled mission per bot in a fleet sequence", async () => {
+    const { body: botsBody } = await api("GET", "/api/bots");
+    const bot = botsBody.bots[0];
+    const routineIds: string[] = [];
+
+    for (const [name, enabled] of [
+      ["First mission", true],
+      ["Second mission", true],
+      ["Paused mission", false],
+    ] as const) {
+      const created = await api("POST", "/api/routines", {
+        botId: bot.id,
+        name,
+        prompt: `Run ${name.toLowerCase()}`,
+        schedule: { kind: "interval", minutes: 30 },
+        enabled,
+      });
+      expect(created.status).toBe(201);
+      routineIds.push(created.body.routine.id);
+    }
+
+    const launched = await api("POST", "/api/routines/launch-sequence");
+    expect(launched.status).toBe(200);
+    expect(launched.body).toMatchObject({
+      attempted: 1,
+      started: 0,
+      skipped: 0,
+      failed: 1,
+    });
+    expect(launched.body.results).toHaveLength(1);
+    expect(["First mission", "Second mission"]).toContain(launched.body.results[0].routineName);
+
+    const listed = await api("GET", `/api/routines?botId=${bot.id}`);
+    const sequenceRoutines = listed.body.routines.filter((routine: { id: string }) => routineIds.includes(routine.id));
+    expect(sequenceRoutines.filter((routine: { lastRunAt?: number }) => routine.lastRunAt !== undefined)).toHaveLength(1);
+    expect(sequenceRoutines.find((routine: { name: string }) => routine.name === "Paused mission").lastRunAt).toBeUndefined();
+
+    for (const id of routineIds) {
+      expect((await api("DELETE", `/api/routines/${id}`)).status).toBe(200);
+    }
+  });
+
   it("404s unknown routes with the route in the error", async () => {
     const res = await api("GET", "/api/definitely-not-a-route");
     expect(res.status).toBe(404);

@@ -657,6 +657,84 @@ const server = createServer(async (req, res) => {
       });
       return json(res, 201, { routine });
     }
+    if (method === "POST" && path === "/api/routines/launch-sequence") {
+      const candidates = routines
+        .list()
+        .filter((routine) => routine.enabled)
+        .sort(
+          (a, b) =>
+            (a.nextRunAt ?? Number.MAX_SAFE_INTEGER) - (b.nextRunAt ?? Number.MAX_SAFE_INTEGER) ||
+            a.createdAt - b.createdAt,
+        );
+      const selected = candidates.filter(
+        (routine, index) => candidates.findIndex((candidate) => candidate.botId === routine.botId) === index,
+      );
+      const results: Array<{
+        botId: string;
+        routineId: string;
+        routineName: string;
+        status: "started" | "skipped" | "failed";
+        reason?: string;
+      }> = [];
+
+      for (const candidate of selected) {
+        const bot = store.bot(candidate.botId);
+        if (!bot) {
+          results.push({
+            botId: candidate.botId,
+            routineId: candidate.id,
+            routineName: candidate.name,
+            status: "failed",
+            reason: "bot no longer exists",
+          });
+          continue;
+        }
+        if (bot.busy || routines.isRunning(candidate.id)) {
+          results.push({
+            botId: bot.id,
+            routineId: candidate.id,
+            routineName: candidate.name,
+            status: "skipped",
+            reason: bot.busy ? "bot is already working" : "routine is already launching",
+          });
+          continue;
+        }
+
+        const routine = await routines.fire(candidate.id, { manual: true });
+        if (routine?.lastStatus === "ok") {
+          results.push({
+            botId: bot.id,
+            routineId: candidate.id,
+            routineName: candidate.name,
+            status: "started",
+          });
+        } else if (routine?.lastStatus === "skipped-busy") {
+          results.push({
+            botId: bot.id,
+            routineId: candidate.id,
+            routineName: candidate.name,
+            status: "skipped",
+            reason: routine.lastError ?? "bot is already working",
+          });
+        } else {
+          results.push({
+            botId: bot.id,
+            routineId: candidate.id,
+            routineName: candidate.name,
+            status: "failed",
+            reason: routine?.lastError ?? "routine could not be launched",
+          });
+        }
+      }
+
+      return json(res, 200, {
+        attempted: selected.length,
+        started: results.filter((result) => result.status === "started").length,
+        skipped: results.filter((result) => result.status === "skipped").length,
+        failed: results.filter((result) => result.status === "failed").length,
+        results,
+      });
+    }
     m = path.match(/^\/api\/routines\/([\w-]+)$/);
     if (m && method === "PATCH") {
       const routine = routines.patch(m[1], await readBody(req));
